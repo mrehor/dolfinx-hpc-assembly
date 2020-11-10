@@ -119,7 +119,7 @@ def monolithic_assembly(reps, mesh, lifting):
     return t_mat, t_vec, num_dofs, A, b
 
 
-def block_assembly(reps, mesh, lifting=True, nest=False):
+def block_assembly(reps, mesh, lifting, nest=False):
     t_mat = 0.0
     t_vec = 0.0
 
@@ -190,6 +190,8 @@ def block_assembly(reps, mesh, lifting=True, nest=False):
             #     dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
             #     t_vec += tmr.elapsed()[0]
 
+            # NOTE: The following code does exactly the same thing as
+            #       dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
             a, L = J, F
             scale = -1.0
             with dolfinx.common.Timer("ZZZ Vec Block") as tmr:
