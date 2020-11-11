@@ -70,10 +70,7 @@ def target_mesh_size(comm_size, num_coredofs=30000):
     return N[0]
 
 
-def monolithic_assembly(reps, mesh, lifting):
-    t_mat = 0.0
-    t_vec = 0.0
-
+def monolithic_assembly(clock, reps, mesh, lifting):
     P2_el = ufl.VectorElement("Lagrange", mesh.ufl_cell(), 2)
     P1_el = ufl.FiniteElement("Lagrange", mesh.ufl_cell(), 1)
     TH = P2_el * P1_el
@@ -104,7 +101,7 @@ def monolithic_assembly(reps, mesh, lifting):
         with dolfinx.common.Timer("ZZZ Mat Monolithic") as tmr:
             dolfinx.fem.assemble_matrix(A, J, bcs)
             A.assemble()
-            t_mat += tmr.elapsed()[0]
+            clock["mat"] += tmr.elapsed()[0]
 
         with dolfinx.common.Timer("ZZZ Vec Monolithic") as tmr:
             dolfinx.fem.assemble_vector(b, F)
@@ -114,15 +111,12 @@ def monolithic_assembly(reps, mesh, lifting):
             if lifting:
                 dolfinx.fem.set_bc(b, bcs, x0=U.vector, scale=-1.0)
                 b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
-            t_vec += tmr.elapsed()[0]
+            clock["vec"] += tmr.elapsed()[0]
 
-    return t_mat, t_vec, num_dofs, A, b
+    return num_dofs, A, b
 
 
-def block_assembly(reps, mesh, lifting, nest=False):
-    t_mat = 0.0
-    t_vec = 0.0
-
+def block_assembly(clock, reps, mesh, lifting, nest=False):
     P2 = dolfinx.function.VectorFunctionSpace(mesh, ("Lagrange", 2))
     P1 = dolfinx.function.FunctionSpace(mesh, ("Lagrange", 1))
     num_dofs = P2.dim + P1.dim
@@ -157,7 +151,7 @@ def block_assembly(reps, mesh, lifting, nest=False):
             with dolfinx.common.Timer("ZZZ Mat Nest") as tmr:
                 dolfinx.fem.assemble_matrix_nest(A, J, bcs)
                 A.assemble()
-                t_mat += tmr.elapsed()[0]
+                clock["mat"] += tmr.elapsed()[0]
 
             with dolfinx.common.Timer("ZZZ Vec Nest") as tmr:
                 dolfinx.fem.assemble_vector_nest(b, F)
@@ -168,7 +162,7 @@ def block_assembly(reps, mesh, lifting, nest=False):
                 if lifting:
                     bcs0 = dolfinx.cpp.fem.bcs_rows(dolfinx.fem.assemble._create_cpp_form(F), bcs)
                     dolfinx.fem.set_bc_nest(b, bcs0, x0, scale=-1.0)
-                t_vec += tmr.elapsed()[0]
+                clock["vec"] += tmr.elapsed()[0]
     else:
         from dolfinx.fem.assemble import _create_cpp_form
 
@@ -183,12 +177,12 @@ def block_assembly(reps, mesh, lifting, nest=False):
             with dolfinx.common.Timer("ZZZ Mat Block") as tmr:
                 dolfinx.fem.assemble_matrix_block(A, J, bcs)
                 A.assemble()
-                t_mat += tmr.elapsed()[0]
+                clock["mat"] += tmr.elapsed()[0]
 
             # # NOTE: Ghosts are updated inside assemble_vector_block
             # with dolfinx.common.Timer("ZZZ Vec Block") as tmr:
             #     dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
-            #     t_vec += tmr.elapsed()[0]
+            #     clock["vec"] += tmr.elapsed()[0]
 
             # NOTE: The following code does exactly the same thing as
             #       dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
@@ -221,9 +215,9 @@ def block_assembly(reps, mesh, lifting, nest=False):
                         size = submap.size_local * submap.block_size
                         dolfinx.cpp.fem.set_bc(b_array[offset:offset + size], bc, _x0, scale)
                         offset += size
-                t_vec += tmr.elapsed()[0]
+                clock["vec"] += tmr.elapsed()[0]
 
-    return t_mat, t_vec, num_dofs, A, b
+    return num_dofs, A, b
 
 
 def test_assembler(
@@ -231,8 +225,8 @@ def test_assembler(
     reps=1,
     num_coredofs=30000,
     lifting=True,
-    overwrite=False,
-    results_file="results_monolithic_assembly.csv",
+    overwrite=True,
+    results_file="results_assembly_routines.csv",
 ):
     """Test chosen assembly routine on Taylor-Hood elements."""
     N = target_mesh_size(MPI.COMM_WORLD.size, num_coredofs)
@@ -240,12 +234,16 @@ def test_assembler(
     mesh = dolfinx.generation.UnitCubeMesh(MPI.COMM_WORLD, N, N, N)
     comm = mesh.mpi_comm()
 
+    clock = {
+        "mat": 0.0,
+        "vec": 0.0,
+    }
     if atype == "mono":
-        t_mat, t_vec, num_dofs, A, b = monolithic_assembly(reps, mesh, lifting)
+        num_dofs, A, b = monolithic_assembly(clock, reps, mesh, lifting)
     elif atype == "block":
-        t_mat, t_vec, num_dofs, A, b = block_assembly(reps, mesh, lifting)
+        num_dofs, A, b = block_assembly(clock, reps, mesh, lifting)
     elif atype == "nest":
-        t_mat, t_vec, num_dofs, A, b = block_assembly(reps, mesh, lifting, nest=True)
+        num_dofs, A, b = block_assembly(clock, reps, mesh, lifting, nest=True)
 
     # Evaluate norms
     A_norm = nest_matrix_norm(A) if atype == "nest" else A.norm()
@@ -281,6 +279,7 @@ def test_assembler(
         import os
 
         results = {
+            "assembler": atype,
             "mesh_resolution": N,
             "num_procs": comm.size,
             "num_reps": reps,
@@ -290,14 +289,12 @@ def test_assembler(
             "max_core_dofs": comm.allreduce(core_dofs, op=MPI.MAX),
             "min_core_ghosts": comm.allreduce(core_gdofs - core_dofs, op=MPI.MIN),
             "max_core_ghosts": comm.allreduce(core_gdofs - core_dofs, op=MPI.MAX),
-            "t_mat": comm.allreduce(t_mat, op=MPI.SUM) / comm.size,
-            "t_vec": comm.allreduce(t_vec, op=MPI.SUM) / comm.size,
-            "t_mat_dof": comm.allreduce(t_mat / core_dofs, op=MPI.SUM) / comm.size,
-            "t_vec_dof": comm.allreduce(t_vec / core_dofs, op=MPI.SUM) / comm.size,
             "mat_norm": A_norm,
             "vec_norm": b_norm,
-            "assembler": atype,
         }
+        for key in clock.keys():
+            results[f"t_{key}"] = comm.allreduce(clock[key], op=MPI.SUM) / comm.size
+            results[f"t_{key}_dof"] = comm.allreduce(clock[key] / core_dofs, op=MPI.SUM) / comm.size
 
         if comm.rank == 0:
             data = pandas.DataFrame(results, index=[0])
