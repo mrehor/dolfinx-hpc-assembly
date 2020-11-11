@@ -94,6 +94,11 @@ def monolithic_assembly(clock, reps, mesh, lifting):
     J = ufl.derivative(F, U, ufl.TrialFunction(W))
     bcs = []
 
+    # Get jitted forms for better performance
+    F = _create_cpp_form(F)
+    J = _create_cpp_form(J)
+    a, L = J, F
+
     b = dolfinx.fem.create_vector(F)
     A = dolfinx.fem.create_matrix(J)
     for i in range(reps):
@@ -101,7 +106,6 @@ def monolithic_assembly(clock, reps, mesh, lifting):
         with b.localForm() as b_local:
             b_local.set(0.0)
 
-        a = J
         diagonal = 1.0
         with dolfinx.common.Timer("ZZZ Mat") as tmr:
 
@@ -123,7 +127,6 @@ def monolithic_assembly(clock, reps, mesh, lifting):
 
             clock["mat"] += tmr.elapsed()[0]
 
-        a, L = J, F
         with dolfinx.common.Timer("ZZZ Vec") as tmr:
 
             # dolfinx.fem.assemble_vector(b, F)
@@ -179,6 +182,11 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
     ]
     bcs = []
 
+    # Get jitted forms for better performance
+    F = _create_cpp_form(F)
+    J = _create_cpp_form(J)
+    a, L = J, F
+
     if nest:
         x0 = dolfinx.fem.create_vector_nest(F)
         b = dolfinx.fem.create_vector_nest(F)
@@ -189,7 +197,6 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
                 with b_sub.localForm() as b_local:
                     b_local.set(0.0)
 
-            a = J
             diagonal = 1.0
             with dolfinx.common.Timer("ZZZ Mat") as tmr:
 
@@ -213,7 +220,6 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
 
                 clock["mat"] += tmr.elapsed()[0]
 
-            a, L = J, F
             with dolfinx.common.Timer("ZZZ Vec") as tmr:
 
                 # dolfinx.fem.assemble_vector_nest(b, F)
@@ -230,7 +236,7 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
 
                 if lifting:
                     with dolfinx.common.Timer("ZZZ Vec lifting") as tmr_3:
-                        dolfinx.fem.apply_lifting_nest(b, J, bcs, x0, scale=-1.0)
+                        dolfinx.fem.apply_lifting_nest(b, _a, bcs, x0, scale=-1.0)
                         clock["vec_lifting"] += tmr_3.elapsed()[0]
 
                 with dolfinx.common.Timer("ZZZ Vec ghosts") as tmr_4:
@@ -240,8 +246,7 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
 
                 if lifting:
                     with dolfinx.common.Timer("ZZZ Vec set_bc") as tmr_5:
-                        bcs0 = dolfinx.cpp.fem.bcs_rows(_create_cpp_form(F), bcs)
-                        # bcs0 = dolfinx.cpp.fem.bcs_rows(_L, bcs) # FIXME: Use this!
+                        bcs0 = dolfinx.cpp.fem.bcs_rows(_L, bcs)
                         dolfinx.fem.set_bc_nest(b, bcs0, x0, scale=-1.0)
                         clock["vec_set_bc"] += tmr_5.elapsed()[0]
 
@@ -255,7 +260,6 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
             with b.localForm() as b_local:
                 b_local.set(0.0)
 
-            a = J
             diagonal = 1.0
             with dolfinx.common.Timer("ZZZ Mat") as tmr:
 
@@ -282,7 +286,7 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
                     clock["mat_assemble_petsc"] += tmr_3.elapsed()[0]
                 clock["mat"] += tmr.elapsed()[0]
 
-            a, L = J, F
+            scale = -1.0
             with dolfinx.common.Timer("ZZZ Vec") as tmr:
 
                 # dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
@@ -302,16 +306,16 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
                     b_local = dolfinx.cpp.la.get_local_vectors(b, maps)
                     if lifting:
                         tmr_3 = stack.enter_context(dolfinx.common.Timer("ZZZ Mat lifting"))
-                        bcs1 = dolfinx.cpp.fem.bcs_cols(_create_cpp_form(a), bcs)
+                        bcs1 = dolfinx.cpp.fem.bcs_cols(_a, bcs)
                     else:
                         bcs1 = len(L) * [None]
-                    for b_sub, L_sub, a_sub, bc in zip(b_local, L, a, bcs1):
-                        dolfinx.cpp.fem.assemble_vector(b_sub, _create_cpp_form(L_sub))
+                    for b_sub, L_sub, a_sub, bc in zip(b_local, _L, _a, bcs1):
+                        dolfinx.cpp.fem.assemble_vector(b_sub, L_sub)
                         if lifting:
-                            dolfinx.cpp.fem.apply_lifting(b_sub, _create_cpp_form(a_sub), bc, x0_local, -1.0)
+                            dolfinx.cpp.fem.apply_lifting(b_sub, a_sub, bc, x0_local, scale)
                     if lifting:
                         clock["vec_lifting"] += tmr_3.elapsed()[0]
-                    dolfinx.cpp.la.scatter_local_vectors(b, b_local, maps)
+                    dolfinx.cpp.la.scatter_local_vectors(b, b_local, maps) # FIXME: Move to ghost update!
                     clock["vec_assemble"] += tmr_2.elapsed()[0]
 
                 with dolfinx.common.Timer("ZZZ Vec ghosts") as tmr_4:
@@ -320,12 +324,12 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
 
                 if lifting:
                     with dolfinx.common.Timer("ZZZ Vec set_bc") as tmr_5:
-                        bcs0 = dolfinx.cpp.fem.bcs_rows(_create_cpp_form(L), bcs)
+                        bcs0 = dolfinx.cpp.fem.bcs_rows(_L, bcs)
                         offset = 0
                         b_array = b.getArray(readonly=False)
                         for submap, bc, _x0 in zip(maps, bcs0, x0_sub):
                             size = submap.size_local * submap.block_size
-                            dolfinx.cpp.fem.set_bc(b_array[offset:offset + size], bc, _x0, scale=-1.0)
+                            dolfinx.cpp.fem.set_bc(b_array[offset:offset + size], bc, _x0, scale)
                             offset += size
                         clock["vec_set_bc"] += tmr_5.elapsed()[0]
                 # --

@@ -3,7 +3,7 @@ set -ex
 shopt -s extglob
 shopt -s nullglob
 
-jobname="HPC-r1"
+jobname="HPC-r2"
 
 LAUNCHER="hpc_launcher_assembly_routines.sh"
 LAUNCHER_OPTS="-J ${jobname} -d singleton --ntasks-per-node 28"
