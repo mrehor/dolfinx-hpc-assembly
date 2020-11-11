@@ -70,7 +70,7 @@ def target_mesh_size(comm_size, num_coredofs=30000):
     return N[0]
 
 
-def monolithic_assembly(clock, reps, mesh, use_ufl_forms):
+def monolithic_assembly(clock, reps, mesh, use_cpp_forms):
     P2_el = ufl.VectorElement("Lagrange", mesh.ufl_cell(), 2)
     P1_el = ufl.FiniteElement("Lagrange", mesh.ufl_cell(), 1)
     TH = P2_el * P1_el
@@ -92,7 +92,7 @@ def monolithic_assembly(clock, reps, mesh, use_ufl_forms):
     bcs = []
 
     # Get jitted forms for better performance
-    if not use_ufl_forms:
+    if use_cpp_forms:
         F = dolfinx.fem.assemble._create_cpp_form(F)
         J = dolfinx.fem.assemble._create_cpp_form(J)
 
@@ -119,7 +119,7 @@ def monolithic_assembly(clock, reps, mesh, use_ufl_forms):
     return num_dofs, A, b
 
 
-def block_assembly(clock, reps, mesh, use_ufl_forms, nest=False):
+def block_assembly(clock, reps, mesh, use_cpp_forms, nest=False):
     P2 = dolfinx.function.VectorFunctionSpace(mesh, ("Lagrange", 2))
     P1 = dolfinx.function.FunctionSpace(mesh, ("Lagrange", 1))
     num_dofs = P2.dim + P1.dim
@@ -142,7 +142,7 @@ def block_assembly(clock, reps, mesh, use_ufl_forms, nest=False):
     bcs = []
 
     # Get jitted forms for better performance
-    if not use_ufl_forms:
+    if use_cpp_forms:
         F = dolfinx.fem.assemble._create_cpp_form(F)
         J = dolfinx.fem.assemble._create_cpp_form(J)
 
@@ -195,7 +195,7 @@ def test_assembler(
     atype="mono",
     reps=1,
     num_coredofs=30000,
-    use_ufl_forms=False,
+    use_cpp_forms=True,
     overwrite=True,
     results_file="results_assembly_routines.csv",
 ):
@@ -210,11 +210,11 @@ def test_assembler(
         "vec": 0.0,
     }
     if atype == "mono":
-        num_dofs, A, b = monolithic_assembly(clock, reps, mesh, use_ufl_forms)
+        num_dofs, A, b = monolithic_assembly(clock, reps, mesh, use_cpp_forms)
     elif atype == "block":
-        num_dofs, A, b = block_assembly(clock, reps, mesh, use_ufl_forms)
+        num_dofs, A, b = block_assembly(clock, reps, mesh, use_cpp_forms)
     elif atype == "nest":
-        num_dofs, A, b = block_assembly(clock, reps, mesh, use_ufl_forms, nest=True)
+        num_dofs, A, b = block_assembly(clock, reps, mesh, use_cpp_forms, nest=True)
 
     # Evaluate norms
     A_norm = nest_matrix_norm(A) if atype == "nest" else A.norm()
@@ -290,9 +290,9 @@ if __name__ == "__main__":
     parser.add_argument("-t", type=str, default="mono", dest="atype", choices=["mono", "block", "nest"], help="type of assembly routine")
     parser.add_argument("-r", type=int, default=1, help="number of assembly repetitions")
     parser.add_argument("--dofs", type=int, default=30000, help="number of DOFs per core")
-    parser.add_argument("--ufl-forms", dest="use_ufl_forms", action="store_true", help="UFL forms will be sent to assembler with this option")
+    parser.add_argument("--cpp-forms", dest="use_cpp_forms", action="store_true", help="prepare jitted forms with .cpp_object attribute outside assembly loop")
     parser.add_argument("--overwrite", action="store_true", help="overwrite existing results file")
     parser.add_argument("--results", type=str, metavar="FILENAME", default="results_assembly_routines.csv", help="CSV file to store the results, requires pandas")
     args = parser.parse_args(sys.argv[1:])
 
-    sys.exit(test_assembler(args.atype, args.r, args.dofs, args.use_ufl_forms, args.overwrite, args.results))
+    sys.exit(test_assembler(args.atype, args.r, args.dofs, args.use_cpp_forms, args.overwrite, args.results))

@@ -48,7 +48,7 @@ def generate_output(results_file):
     for assembler, marker, color in [
         ("mono", "o", "C0"), ("block", "s", "C1"), ("nest", "v", "C2"), ("split", "d", "C3")
     ]:
-        subdata = data.loc[data["assembler"] == assembler]
+        subdata = data.loc[data["assembler"] == assembler].loc[data["num_procs"] > 28]
         if not subdata.empty:
             print("")
             print(subdata)

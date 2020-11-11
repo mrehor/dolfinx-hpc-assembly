@@ -6,7 +6,7 @@ shopt -s nullglob
 results="results_assembly_routines.csv"
 
 args="--results $results -r 1 --dofs 30000"
-args="$args --ufl-forms"
+args="$args --cpp-forms"
 
 assembler="-t mono"
 mpirun -np 1 python3 test_assembly_routines.py $args $assembler --overwrite
