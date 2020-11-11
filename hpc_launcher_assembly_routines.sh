@@ -1,8 +1,8 @@
 #!/bin/bash -l
 #SBATCH -J AssemblyRoutines
 #SBATCH -p batch
-#SBATCH --qos=normal
-#SBATCH --time=0-00:05:00
+#SBATCH --qos=besteffort
+#SBATCH --time=0-00:03:00
 
 source $HOME/fenicsx-iris-cluster/env-fenics.sh
 

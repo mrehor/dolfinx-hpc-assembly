@@ -6,6 +6,13 @@ NOTE: This test is based on [the unit test] from FEniCS/DOLFINX.
 [the unit test]: https://github.com/FEniCS/dolfinx/blob/939a235be7dc8808b1f09d0432e433b089e67f1e/python/test/unit/fem/test_nonlinear_assembler.py
 """
 
+from mpi4py import MPI
+from petsc4py import PETSc
+
+import numpy
+import ufl
+import dolfinx
+
 # --------------------------------------------------------------------------------------------------
 # Monkeypatch for running tests on ULHPC cluster Iris (https://hpc.uni.lu/systems/iris/)
 
@@ -29,13 +36,6 @@ if socket.gethostname().startswith("iris"):
     assert platform._uname_cache is None
     platform._uname_cache = uname_result(system, node, release, version, machine, machine)
 # --------------------------------------------------------------------------------------------------
-
-from mpi4py import MPI
-from petsc4py import PETSc
-
-import numpy
-import ufl
-import dolfinx
 
 
 def nest_matrix_norm(A):
@@ -70,7 +70,7 @@ def target_mesh_size(comm_size, num_coredofs=30000):
     return N[0]
 
 
-def monolithic_assembly(clock, reps, mesh, lifting):
+def monolithic_assembly(clock, reps, mesh, use_ufl_forms):
     P2_el = ufl.VectorElement("Lagrange", mesh.ufl_cell(), 2)
     P1_el = ufl.FiniteElement("Lagrange", mesh.ufl_cell(), 1)
     TH = P2_el * P1_el
@@ -92,8 +92,9 @@ def monolithic_assembly(clock, reps, mesh, lifting):
     bcs = []
 
     # Get jitted forms for better performance
-    F = dolfinx.fem.assembler._create_cpp_form(F)
-    J = dolfinx.fem.assembler._create_cpp_form(J)
+    if not use_ufl_forms:
+        F = dolfinx.fem.assemble._create_cpp_form(F)
+        J = dolfinx.fem.assemble._create_cpp_form(J)
 
     b = dolfinx.fem.create_vector(F)
     A = dolfinx.fem.create_matrix(J)
@@ -109,18 +110,16 @@ def monolithic_assembly(clock, reps, mesh, lifting):
 
         with dolfinx.common.Timer("ZZZ Vec Monolithic") as tmr:
             dolfinx.fem.assemble_vector(b, F)
-            if lifting:
-                dolfinx.fem.apply_lifting(b, [J], bcs=[bcs], x0=[U.vector], scale=-1.0)
+            dolfinx.fem.apply_lifting(b, [J], bcs=[bcs], x0=[U.vector], scale=-1.0)
             b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
-            if lifting:
-                dolfinx.fem.set_bc(b, bcs, x0=U.vector, scale=-1.0)
-                b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+            dolfinx.fem.set_bc(b, bcs, x0=U.vector, scale=-1.0)
+            b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
             clock["vec"] += tmr.elapsed()[0]
 
     return num_dofs, A, b
 
 
-def block_assembly(clock, reps, mesh, lifting, nest=False):
+def block_assembly(clock, reps, mesh, use_ufl_forms, nest=False):
     P2 = dolfinx.function.VectorFunctionSpace(mesh, ("Lagrange", 2))
     P1 = dolfinx.function.FunctionSpace(mesh, ("Lagrange", 1))
     num_dofs = P2.dim + P1.dim
@@ -143,8 +142,9 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
     bcs = []
 
     # Get jitted forms for better performance
-    F = dolfinx.fem.assembler._create_cpp_form(F)
-    J = dolfinx.fem.assembler._create_cpp_form(J)
+    if not use_ufl_forms:
+        F = dolfinx.fem.assemble._create_cpp_form(F)
+        J = dolfinx.fem.assemble._create_cpp_form(J)
 
     if nest:
         x0 = dolfinx.fem.create_vector_nest(F)
@@ -163,17 +163,13 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
 
             with dolfinx.common.Timer("ZZZ Vec Nest") as tmr:
                 dolfinx.fem.assemble_vector_nest(b, F)
-                if lifting:
-                    dolfinx.fem.apply_lifting_nest(b, J, bcs, x0, scale=-1.0)
+                dolfinx.fem.apply_lifting_nest(b, J, bcs, x0, scale=-1.0)
                 for b_sub in b.getNestSubVecs():
                     b_sub.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
-                if lifting:
-                    bcs0 = dolfinx.cpp.fem.bcs_rows(dolfinx.fem.assemble._create_cpp_form(F), bcs)
-                    dolfinx.fem.set_bc_nest(b, bcs0, x0, scale=-1.0)
+                bcs0 = dolfinx.cpp.fem.bcs_rows(dolfinx.fem.assemble._create_cpp_form(F), bcs)
+                dolfinx.fem.set_bc_nest(b, bcs0, x0, scale=-1.0)
                 clock["vec"] += tmr.elapsed()[0]
     else:
-        from dolfinx.fem.assemble import _create_cpp_form
-
         x0 = dolfinx.fem.create_vector_block(F)
         b = dolfinx.fem.create_vector_block(F)
         A = dolfinx.fem.create_matrix_block(J)
@@ -187,42 +183,9 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
                 A.assemble()
                 clock["mat"] += tmr.elapsed()[0]
 
-            # # NOTE: Ghosts are updated inside assemble_vector_block
-            # with dolfinx.common.Timer("ZZZ Vec Block") as tmr:
-            #     dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
-            #     clock["vec"] += tmr.elapsed()[0]
-
-            # NOTE: The following code does exactly the same thing as
-            #       dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
-            a, L = J, F
-            scale = -1.0
+            # NOTE: Ghosts are updated inside assemble_vector_block
             with dolfinx.common.Timer("ZZZ Vec Block") as tmr:
-                maps = [form.function_spaces[0].dofmap.index_map for form in _create_cpp_form(L)]
-                if x0 is not None:
-                    x0_local = dolfinx.cpp.la.get_local_vectors(x0, maps)
-                    x0_sub = x0_local
-                else:
-                    x0_local = []
-                    x0_sub = [None] * len(maps)
-
-                bcs1 = dolfinx.cpp.fem.bcs_cols(_create_cpp_form(a), bcs) if lifting else len(L) * [None]
-                b_local = dolfinx.cpp.la.get_local_vectors(b, maps)
-                for b_sub, L_sub, a_sub, bc in zip(b_local, L, a, bcs1):
-                    dolfinx.cpp.fem.assemble_vector(b_sub, _create_cpp_form(L_sub))
-                    if lifting:
-                        dolfinx.cpp.fem.apply_lifting(b_sub, _create_cpp_form(a_sub), bc, x0_local, scale)
-
-                dolfinx.cpp.la.scatter_local_vectors(b, b_local, maps)
-                b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
-
-                if lifting:
-                    bcs0 = dolfinx.cpp.fem.bcs_rows(_create_cpp_form(L), bcs)
-                    offset = 0
-                    b_array = b.getArray(readonly=False)
-                    for submap, bc, _x0 in zip(maps, bcs0, x0_sub):
-                        size = submap.size_local * submap.block_size
-                        dolfinx.cpp.fem.set_bc(b_array[offset:offset + size], bc, _x0, scale)
-                        offset += size
+                dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
                 clock["vec"] += tmr.elapsed()[0]
 
     return num_dofs, A, b
@@ -232,7 +195,7 @@ def test_assembler(
     atype="mono",
     reps=1,
     num_coredofs=30000,
-    lifting=True,
+    use_ufl_forms=False,
     overwrite=True,
     results_file="results_assembly_routines.csv",
 ):
@@ -247,11 +210,11 @@ def test_assembler(
         "vec": 0.0,
     }
     if atype == "mono":
-        num_dofs, A, b = monolithic_assembly(clock, reps, mesh, lifting)
+        num_dofs, A, b = monolithic_assembly(clock, reps, mesh, use_ufl_forms)
     elif atype == "block":
-        num_dofs, A, b = block_assembly(clock, reps, mesh, lifting)
+        num_dofs, A, b = block_assembly(clock, reps, mesh, use_ufl_forms)
     elif atype == "nest":
-        num_dofs, A, b = block_assembly(clock, reps, mesh, lifting, nest=True)
+        num_dofs, A, b = block_assembly(clock, reps, mesh, use_ufl_forms, nest=True)
 
     # Evaluate norms
     A_norm = nest_matrix_norm(A) if atype == "nest" else A.norm()
@@ -327,9 +290,9 @@ if __name__ == "__main__":
     parser.add_argument("-t", type=str, default="mono", dest="atype", choices=["mono", "block", "nest"], help="type of assembly routine")
     parser.add_argument("-r", type=int, default=1, help="number of assembly repetitions")
     parser.add_argument("--dofs", type=int, default=30000, help="number of DOFs per core")
-    parser.add_argument("--no-lifting", action="store_false", dest="lifting", help="do not apply any BC-related lifting")
+    parser.add_argument("--ufl-forms", dest="use_ufl_forms", action="store_true", help="UFL forms will be sent to assembler with this option")
     parser.add_argument("--overwrite", action="store_true", help="overwrite existing results file")
     parser.add_argument("--results", type=str, metavar="FILENAME", default="results_assembly_routines.csv", help="CSV file to store the results, requires pandas")
     args = parser.parse_args(sys.argv[1:])
 
-    sys.exit(test_assembler(args.atype, args.r, args.dofs, args.lifting, args.overwrite, args.results))
+    sys.exit(test_assembler(args.atype, args.r, args.dofs, args.use_ufl_forms, args.overwrite, args.results))
