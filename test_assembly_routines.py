@@ -91,6 +91,10 @@ def monolithic_assembly(clock, reps, mesh, lifting):
     J = ufl.derivative(F, U, ufl.TrialFunction(W))
     bcs = []
 
+    # Get jitted forms for better performance
+    F = dolfinx.fem.assembler._create_cpp_form(F)
+    J = dolfinx.fem.assembler._create_cpp_form(J)
+
     b = dolfinx.fem.create_vector(F)
     A = dolfinx.fem.create_matrix(J)
     for i in range(reps):
@@ -137,6 +141,10 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
         [ufl.derivative(F[1], u, du), ufl.derivative(F[1], p, dp)],
     ]
     bcs = []
+
+    # Get jitted forms for better performance
+    F = dolfinx.fem.assembler._create_cpp_form(F)
+    J = dolfinx.fem.assembler._create_cpp_form(J)
 
     if nest:
         x0 = dolfinx.fem.create_vector_nest(F)
