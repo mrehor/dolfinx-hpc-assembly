@@ -36,6 +36,9 @@ from petsc4py import PETSc
 import numpy
 import ufl
 import dolfinx
+import contextlib
+
+from dolfinx.fem.assemble import _create_cpp_form, _extract_function_spaces
 
 
 def nest_matrix_norm(A):
@@ -98,19 +101,57 @@ def monolithic_assembly(clock, reps, mesh, lifting):
         with b.localForm() as b_local:
             b_local.set(0.0)
 
-        with dolfinx.common.Timer("ZZZ Mat Monolithic") as tmr:
-            dolfinx.fem.assemble_matrix(A, J, bcs)
-            A.assemble()
+        a = J
+        diagonal = 1.0
+        with dolfinx.common.Timer("ZZZ Mat") as tmr:
+
+            # dolfinx.fem.assemble_matrix(A, J, bcs)
+            with dolfinx.common.Timer("ZZZ Mat cpp forms") as tmr_1:
+                _a = _create_cpp_form(a)
+                clock["mat_cpp"] += tmr_1.elapsed()[0]
+
+            with dolfinx.common.Timer("ZZZ Mat assemble dolfinx") as tmr_2:
+                dolfinx.cpp.fem.assemble_matrix_petsc(A, _a, bcs)
+                if _a.function_spaces[0].id == _a.function_spaces[1].id:
+                    dolfinx.cpp.fem.add_diagonal(A, _a.function_spaces[0], bcs, diagonal)
+                clock["mat_assemble_dolfinx"] += tmr_2.elapsed()[0]
+            # --
+
+            with dolfinx.common.Timer("ZZZ Mat assemble petsc") as tmr_3:
+                A.assemble()
+                clock["mat_assemble_petsc"] += tmr_3.elapsed()[0]
+
             clock["mat"] += tmr.elapsed()[0]
 
-        with dolfinx.common.Timer("ZZZ Vec Monolithic") as tmr:
-            dolfinx.fem.assemble_vector(b, F)
+        a, L = J, F
+        with dolfinx.common.Timer("ZZZ Vec") as tmr:
+
+            # dolfinx.fem.assemble_vector(b, F)
+            with dolfinx.common.Timer("ZZZ Vec cpp forms") as tmr_1:
+                _L = _create_cpp_form(L)
+                clock["vec_cpp_forms"] += tmr_1.elapsed()[0]
+
+            with dolfinx.common.Timer("ZZZ Vec assemble") as tmr_2:
+                with b.localForm() as b_local:
+                    dolfinx.cpp.fem.assemble_vector(b_local.array_w, _L)
+                clock["vec_assemble"] += tmr_2.elapsed()[0]
+            # --
+
             if lifting:
-                dolfinx.fem.apply_lifting(b, [J], bcs=[bcs], x0=[U.vector], scale=-1.0)
-            b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+                with dolfinx.common.Timer("ZZZ Vec lifting") as tmr_3:
+                    dolfinx.fem.apply_lifting(b, [J], bcs=[bcs], x0=[U.vector], scale=-1.0)
+                    clock["vec_lifting"] += tmr_3.elapsed()[0]
+
+            with dolfinx.common.Timer("ZZZ Vec ghosts") as tmr_4:
+                b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+                clock["vec_ghosts"] += tmr_4.elapsed()[0]
+
             if lifting:
-                dolfinx.fem.set_bc(b, bcs, x0=U.vector, scale=-1.0)
-                b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+                with dolfinx.common.Timer("ZZZ Vec set_bc") as tmr_5:
+                    dolfinx.fem.set_bc(b, bcs, x0=U.vector, scale=-1.0)
+                    b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+                    clock["vec_set_bc"] += tmr_5.elapsed()[0]
+
             clock["vec"] += tmr.elapsed()[0]
 
     return num_dofs, A, b
@@ -148,24 +189,64 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
                 with b_sub.localForm() as b_local:
                     b_local.set(0.0)
 
-            with dolfinx.common.Timer("ZZZ Mat Nest") as tmr:
-                dolfinx.fem.assemble_matrix_nest(A, J, bcs)
-                A.assemble()
+            a = J
+            diagonal = 1.0
+            with dolfinx.common.Timer("ZZZ Mat") as tmr:
+
+                # dolfinx.fem.assemble_matrix_nest(A, J, bcs)
+                with dolfinx.common.Timer("ZZZ Mat cpp forms") as tmr_1:
+                    _a = _create_cpp_form(a)
+                    clock["mat_cpp"] += tmr_1.elapsed()[0]
+
+                with dolfinx.common.Timer("ZZZ Mat assemble dolfinx") as tmr_2:
+                    for i, a_row in enumerate(_a):
+                        for j, a_block in enumerate(a_row):
+                            if a_block is not None:
+                                Asub = A.getNestSubMatrix(i, j)
+                                dolfinx.fem.assemble.assemble_matrix(Asub, a_block, bcs, diagonal) # FIXME: Changed!
+                    clock["mat_assemble_dolfinx"] += tmr_2.elapsed()[0]
+                # --
+
+                with dolfinx.common.Timer("ZZZ Mat assemble petsc") as tmr_3:
+                    A.assemble()
+                    clock["mat_assemble_petsc"] += tmr_3.elapsed()[0]
+
                 clock["mat"] += tmr.elapsed()[0]
 
-            with dolfinx.common.Timer("ZZZ Vec Nest") as tmr:
-                dolfinx.fem.assemble_vector_nest(b, F)
+            a, L = J, F
+            with dolfinx.common.Timer("ZZZ Vec") as tmr:
+
+                # dolfinx.fem.assemble_vector_nest(b, F)
+                with dolfinx.common.Timer("ZZZ Vec cpp forms") as tmr_1:
+                    _L = _create_cpp_form(L)
+                    clock["vec_cpp_forms"] += tmr_1.elapsed()[0]
+
+                with dolfinx.common.Timer("ZZZ Vec assemble") as tmr_2:
+                    for b_sub, L_sub in zip(b.getNestSubVecs(), _L):
+                        with b_sub.localForm() as b_local:
+                            dolfinx.cpp.fem.assemble_vector(b_local.array_w, L_sub)
+                    clock["vec_assemble"] += tmr_2.elapsed()[0]
+                # --
+
                 if lifting:
-                    dolfinx.fem.apply_lifting_nest(b, J, bcs, x0, scale=-1.0)
-                for b_sub in b.getNestSubVecs():
-                    b_sub.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+                    with dolfinx.common.Timer("ZZZ Vec lifting") as tmr_3:
+                        dolfinx.fem.apply_lifting_nest(b, J, bcs, x0, scale=-1.0)
+                        clock["vec_lifting"] += tmr_3.elapsed()[0]
+
+                with dolfinx.common.Timer("ZZZ Vec ghosts") as tmr_4:
+                    for b_sub in b.getNestSubVecs():
+                        b_sub.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+                    clock["vec_ghosts"] += tmr_4.elapsed()[0]
+
                 if lifting:
-                    bcs0 = dolfinx.cpp.fem.bcs_rows(dolfinx.fem.assemble._create_cpp_form(F), bcs)
-                    dolfinx.fem.set_bc_nest(b, bcs0, x0, scale=-1.0)
+                    with dolfinx.common.Timer("ZZZ Vec set_bc") as tmr_5:
+                        bcs0 = dolfinx.cpp.fem.bcs_rows(_create_cpp_form(F), bcs)
+                        # bcs0 = dolfinx.cpp.fem.bcs_rows(_L, bcs) # FIXME: Use this!
+                        dolfinx.fem.set_bc_nest(b, bcs0, x0, scale=-1.0)
+                        clock["vec_set_bc"] += tmr_5.elapsed()[0]
+
                 clock["vec"] += tmr.elapsed()[0]
     else:
-        from dolfinx.fem.assemble import _create_cpp_form
-
         x0 = dolfinx.fem.create_vector_block(F)
         b = dolfinx.fem.create_vector_block(F)
         A = dolfinx.fem.create_matrix_block(J)
@@ -174,47 +255,81 @@ def block_assembly(clock, reps, mesh, lifting, nest=False):
             with b.localForm() as b_local:
                 b_local.set(0.0)
 
-            with dolfinx.common.Timer("ZZZ Mat Block") as tmr:
-                dolfinx.fem.assemble_matrix_block(A, J, bcs)
-                A.assemble()
+            a = J
+            diagonal = 1.0
+            with dolfinx.common.Timer("ZZZ Mat") as tmr:
+
+                # dolfinx.fem.assemble_matrix_block(A, J, bcs)
+                with dolfinx.common.Timer("ZZZ Mat cpp forms") as tmr_1:
+                    _a = _create_cpp_form(a)
+                    clock["mat_cpp"] += tmr_1.elapsed()[0]
+
+                with dolfinx.common.Timer("ZZZ Mat assemble dolfinx") as tmr_2:
+                    V = _extract_function_spaces(_a)
+                    is_rows = dolfinx.cpp.la.create_petsc_index_sets([Vsub.dofmap.index_map for Vsub in V[0]])
+                    is_cols = dolfinx.cpp.la.create_petsc_index_sets([Vsub.dofmap.index_map for Vsub in V[1]])
+                    for i, a_row in enumerate(_a):
+                        for j, a_sub in enumerate(a_row):
+                            if a_sub is not None:
+                                Asub = A.getLocalSubMatrix(is_rows[i], is_cols[j])
+                                dolfinx.fem.assemble_matrix(Asub, a_sub, bcs, diagonal)
+                                A.restoreLocalSubMatrix(is_rows[i], is_cols[j], Asub)
+                    clock["mat_assemble_dolfinx"] += tmr_2.elapsed()[0]
+                # --
+
+                with dolfinx.common.Timer("ZZZ Mat assemble petsc") as tmr_3:
+                    A.assemble()
+                    clock["mat_assemble_petsc"] += tmr_3.elapsed()[0]
                 clock["mat"] += tmr.elapsed()[0]
 
-            # # NOTE: Ghosts are updated inside assemble_vector_block
-            # with dolfinx.common.Timer("ZZZ Vec Block") as tmr:
-            #     dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
-            #     clock["vec"] += tmr.elapsed()[0]
-
-            # NOTE: The following code does exactly the same thing as
-            #       dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
             a, L = J, F
-            scale = -1.0
-            with dolfinx.common.Timer("ZZZ Vec Block") as tmr:
-                maps = [form.function_spaces[0].dofmap.index_map for form in _create_cpp_form(L)]
-                if x0 is not None:
-                    x0_local = dolfinx.cpp.la.get_local_vectors(x0, maps)
-                    x0_sub = x0_local
-                else:
-                    x0_local = []
-                    x0_sub = [None] * len(maps)
+            with dolfinx.common.Timer("ZZZ Vec") as tmr:
 
-                bcs1 = dolfinx.cpp.fem.bcs_cols(_create_cpp_form(a), bcs) if lifting else len(L) * [None]
-                b_local = dolfinx.cpp.la.get_local_vectors(b, maps)
-                for b_sub, L_sub, a_sub, bc in zip(b_local, L, a, bcs1):
-                    dolfinx.cpp.fem.assemble_vector(b_sub, _create_cpp_form(L_sub))
+                # dolfinx.fem.assemble_vector_block(b, F, J, bcs, x0=x0, scale=-1.0)
+                with dolfinx.common.Timer("ZZZ Vec cpp forms") as tmr_1:
+                    _L = _create_cpp_form(L)
+                    clock["vec_cpp_forms"] += tmr_1.elapsed()[0]
+
+                with contextlib.ExitStack() as stack:
+                    tmr_2 = stack.enter_context(dolfinx.common.Timer("ZZZ Mat assemble dolfinx"))
+                    maps = [form.function_spaces[0].dofmap.index_map for form in _L]
+                    if x0 is not None:
+                        x0_local = dolfinx.cpp.la.get_local_vectors(x0, maps)
+                        x0_sub = x0_local
+                    else:
+                        x0_local = []
+                        x0_sub = [None] * len(maps)
+                    b_local = dolfinx.cpp.la.get_local_vectors(b, maps)
                     if lifting:
-                        dolfinx.cpp.fem.apply_lifting(b_sub, _create_cpp_form(a_sub), bc, x0_local, scale)
+                        tmr_3 = stack.enter_context(dolfinx.common.Timer("ZZZ Mat lifting"))
+                        bcs1 = dolfinx.cpp.fem.bcs_cols(_create_cpp_form(a), bcs)
+                    else:
+                        bcs1 = len(L) * [None]
+                    for b_sub, L_sub, a_sub, bc in zip(b_local, L, a, bcs1):
+                        dolfinx.cpp.fem.assemble_vector(b_sub, _create_cpp_form(L_sub))
+                        if lifting:
+                            dolfinx.cpp.fem.apply_lifting(b_sub, _create_cpp_form(a_sub), bc, x0_local, -1.0)
+                    if lifting:
+                        clock["vec_lifting"] += tmr_3.elapsed()[0]
+                    dolfinx.cpp.la.scatter_local_vectors(b, b_local, maps)
+                    clock["vec_assemble"] += tmr_2.elapsed()[0]
 
-                dolfinx.cpp.la.scatter_local_vectors(b, b_local, maps)
-                b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+                with dolfinx.common.Timer("ZZZ Vec ghosts") as tmr_4:
+                    b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+                clock["vec_ghosts"] += tmr_4.elapsed()[0]
 
                 if lifting:
-                    bcs0 = dolfinx.cpp.fem.bcs_rows(_create_cpp_form(L), bcs)
-                    offset = 0
-                    b_array = b.getArray(readonly=False)
-                    for submap, bc, _x0 in zip(maps, bcs0, x0_sub):
-                        size = submap.size_local * submap.block_size
-                        dolfinx.cpp.fem.set_bc(b_array[offset:offset + size], bc, _x0, scale)
-                        offset += size
+                    with dolfinx.common.Timer("ZZZ Vec set_bc") as tmr_5:
+                        bcs0 = dolfinx.cpp.fem.bcs_rows(_create_cpp_form(L), bcs)
+                        offset = 0
+                        b_array = b.getArray(readonly=False)
+                        for submap, bc, _x0 in zip(maps, bcs0, x0_sub):
+                            size = submap.size_local * submap.block_size
+                            dolfinx.cpp.fem.set_bc(b_array[offset:offset + size], bc, _x0, scale=-1.0)
+                            offset += size
+                        clock["vec_set_bc"] += tmr_5.elapsed()[0]
+                # --
+
                 clock["vec"] += tmr.elapsed()[0]
 
     return num_dofs, A, b
@@ -236,7 +351,15 @@ def test_assembler(
 
     clock = {
         "mat": 0.0,
+        "mat_cpp": 0.0,
+        "mat_assemble_dolfinx": 0.0,
+        "mat_assemble_petsc": 0.0,
         "vec": 0.0,
+        "vec_cpp_forms": 0.0,
+        "vec_assemble": 0.0,
+        "vec_ghosts": 0.0,
+        "vec_lifting": 0.0,
+        "vec_set_bc": 0.0,
     }
     if atype == "mono":
         num_dofs, A, b = monolithic_assembly(clock, reps, mesh, lifting)
@@ -294,7 +417,7 @@ def test_assembler(
         }
         for key in clock.keys():
             results[f"t_{key}"] = comm.allreduce(clock[key], op=MPI.SUM) / comm.size
-            results[f"t_{key}_dof"] = comm.allreduce(clock[key] / core_dofs, op=MPI.SUM) / comm.size
+            # results[f"t_{key}_dof"] = comm.allreduce(clock[key] / core_dofs, op=MPI.SUM) / comm.size
 
         if comm.rank == 0:
             data = pandas.DataFrame(results, index=[0])

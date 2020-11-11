@@ -51,7 +51,11 @@ def generate_output(results_file):
         subdata = data.loc[data["assembler"] == assembler]
         if not subdata.empty:
             print("")
-            print(subdata)
+            print(subdata.iloc[:, 0:12])
+            print("")
+            print(subdata.iloc[:, 12:16])
+            print("")
+            print(subdata.iloc[:, 16:])
             print("")
             num_procs = subdata["num_procs"].to_numpy()
             plot_opts["linestyle"] = "-"
