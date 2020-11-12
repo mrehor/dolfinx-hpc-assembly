@@ -1,0 +1,39 @@
+== Starting run at Wed Nov 11 14:34:46 CET 2020
+== Job name: HPC-ufl-forms
+== Job ID: 2131682
+== Node list: iris-[007,009,014,023,025,027,035-036,041,044,046,054,131-132,137,146]
+== Submit dir: /mnt/lscratch/users/mrehor/dev/fenics/src/dolfinx-hpc-assembly
+== Number of tasks: 256
+Generating unit cube mesh with edge resolution N = 100
+
+[MPI_AVG] Summary of timings                                   |  reps  wall avg   wall tot
+-------------------------------------------------------------------------------------------
+Build BoxMesh                                                  |     1  6.419486   6.419486
+Build sparsity                                                 |     1  0.493360   0.493360
+Compute SCOTCH graph re-ordering                               |     2  0.039236   0.078472
+Compute entities of dim = 1                                    |     1  0.208157   0.208157
+Compute entities of dim = 2                                    |     1  0.211115   0.211115
+Compute graph partition (SCOTCH)                               |     1  5.082758   5.082758
+Compute local part of mesh dual graph                          |     1  0.020591   0.020591
+Compute local-to-local map                                     |     1  0.000881   0.000881
+Compute non-local part of mesh dual graph                      |     1  0.672959   0.672959
+Compute-local-to-global links for global/local adjacency list  |     1  0.000257   0.000257
+Distribute AdjacencyList                                       |     1  0.246636   0.246636
+Extract partition boundaries from SCOTCH graph                 |     1  0.000863   0.000863
+Fetch float data from remote processes                         |     1  0.057194   0.057194
+Get SCOTCH graph data                                          |     1  0.000001   0.000001
+Init dofmap                                                    |     2  0.567864   1.135728
+Init dofmap from element dofmap                                |     2  0.017438   0.034875
+Init tensor                                                    |     1  0.743161   0.743161
+Partition cells across processes                               |     1  5.780034   5.780034
+SCOTCH: call SCOTCH_dgraphBuild                                |     1  0.027133   0.027133
+SCOTCH: call SCOTCH_dgraphHalo                                 |     1  0.046097   0.046097
+SCOTCH: call SCOTCH_dgraphPart                                 |     1  5.007501   5.007501
+SCOTCH: call SCOTCH_graphBuild                                 |     2  0.000054   0.000108
+SCOTCH: call SCOTCH_graphOrder                                 |     2  0.035562   0.071124
+ZZZ Mat Monolithic                                             |    10  2.114307  21.143067
+ZZZ Vec Monolithic                                             |    10  0.259958   2.599576
+Matrix norm: 185.85132018955173
+Vector norm: 0.0005012717094218152
+Average number of DOFs per process: 99187.90625
+== Finished at Wed Nov 11 14:35:29 CET 2020

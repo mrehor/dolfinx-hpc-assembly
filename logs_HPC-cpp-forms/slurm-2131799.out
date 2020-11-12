@@ -1,0 +1,41 @@
+== Starting run at Wed Nov 11 15:21:56 CET 2020
+== Job name: HPC-cpp-forms
+== Job ID: 2131799
+== Node list: iris-[007,009,014,035-036,046,054,092,108,110-111,129-130,132,137,146]
+== Submit dir: /mnt/lscratch/users/mrehor/dev/fenics/src/dolfinx-hpc-assembly
+== Number of tasks: 256
+Generating unit cube mesh with edge resolution N = 100
+
+[MPI_AVG] Summary of timings                                   |  reps  wall avg   wall tot
+-------------------------------------------------------------------------------------------
+Build BoxMesh                                                  |     1  6.760569   6.760569
+Build sparsity                                                 |     1  0.471596   0.471596
+Compute SCOTCH graph re-ordering                               |     2  0.039545   0.079090
+Compute entities of dim = 1                                    |     1  0.204123   0.204123
+Compute entities of dim = 2                                    |     1  0.171585   0.171585
+Compute graph partition (SCOTCH)                               |     1  5.429836   5.429836
+Compute local part of mesh dual graph                          |     1  0.020351   0.020351
+Compute local-to-local map                                     |     1  0.000859   0.000859
+Compute non-local part of mesh dual graph                      |     1  0.705330   0.705330
+Compute-local-to-global links for global/local adjacency list  |     1  0.000238   0.000238
+Distribute AdjacencyList                                       |     1  0.232873   0.232873
+Extract partition boundaries from SCOTCH graph                 |     1  0.000859   0.000859
+Fetch float data from remote processes                         |     1  0.063280   0.063280
+Get SCOTCH graph data                                          |     1  0.000001   0.000001
+Init dofmap                                                    |     2  0.565851   1.131703
+Init dofmap from element dofmap                                |     2  0.017378   0.034756
+Init tensor                                                    |     1  0.665473   0.665473
+Partition cells across processes                               |     1  6.159309   6.159309
+SCOTCH: call SCOTCH_dgraphBuild                                |     1  0.026697   0.026697
+SCOTCH: call SCOTCH_dgraphHalo                                 |     1  0.029179   0.029179
+SCOTCH: call SCOTCH_dgraphPart                                 |     1  5.371945   5.371945
+SCOTCH: call SCOTCH_graphBuild                                 |     2  0.000054   0.000107
+SCOTCH: call SCOTCH_graphOrder                                 |     2  0.035649   0.071299
+ZZZ Mat Monolithic                                             |    10  1.961844  19.618436
+ZZZ Vec Monolithic                                             |    10  0.051267   0.512670
+Matrix norm: 185.8513201895587
+Vector norm: 0.0005012717094218149
+Average number of DOFs per process: 99187.90625
+srun: Job step aborted: Waiting up to 32 seconds for job step to finish.
+slurmstepd: error: *** STEP 2131799.0 ON iris-007 CANCELLED AT 2020-11-11T15:22:33 DUE TO PREEMPTION ***
+slurmstepd: error: *** JOB 2131799 ON iris-007 CANCELLED AT 2020-11-11T15:22:33 DUE TO PREEMPTION ***

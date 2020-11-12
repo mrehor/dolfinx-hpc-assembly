@@ -16,3 +16,35 @@ postprocessed with
 ```bash
 ./output_assembly_routines.py <filename>
 ```
+
+### Results
+
+The following results were obtained by running
+```bash
+test_assembly_routines.py -t <mono|block|nest> -r 10 --dofs 100000 --cpp-forms
+```
+in parallel. The last option `--cpp-forms` ensures that all forms are converted to
+`dolfinx.cpp.fem.Form` before sending them to the chosen assembly routine.
+
+![Figure 1](results_HPC-cpp-forms.png)
+
+**Figure 1:** MPI-averaged wall time for matrix/vector assembly using the individual routines
+invoked with (bi)linear forms of the type `dolfinx.cpp.fem.Form`.
+
+![Table 2](results_HPC-cpp-forms.png)
+
+**Table 1:** Data for the case shown in Figure 1.
+
+### Be careful!
+
+Things can go wrong if we ommit the option `--cpp-fomr` in which case the forms remain
+of the type `ufl.form.Form` at the time of sending them to the assembly routine.
+
+![Figure 2](results_HPC-ufl-forms.png)
+
+**Figure 2:** MPI-averaged wall time for matrix/vector assembly using the individual routines
+invoked with (bi)linear forms of the type `ufl.form.Form`.
+
+![Table 2](results_HPC-ufl-forms.png)
+
+**Table 2:** Data for the case shown in Figure 2.
