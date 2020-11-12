@@ -39,8 +39,8 @@ invoked with (bi)linear forms of the type `dolfinx.cpp.fem.Form`.
 
 Things can go wrong if the option `--cpp-fomr` is omitted. In that case, the forms remain
 of the type `ufl.form.Form` at the time of sending them to the assembly routine which can lead to
-an I/O overhead (due to dynamic linking of cached forms). This becomes critical with the inter-node
-MPI communication, especially for block/nest assemblers.
+an I/O overhead (due to dynamic linking of cached forms). This becomes perceptible with MPI
+internode communication, especially for block/nest assemblers.
 
 ![Figure 2](results_HPC-ufl-forms.png)
 
